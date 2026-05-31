@@ -1,4 +1,4 @@
-# governance_layer
+# pygola
 
 A configurable AI governance layer (skeleton / v0.1).
 
