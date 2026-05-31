@@ -1,0 +1,66 @@
+I have a monorepo and want to evaluate whether and how to split it into separate repositories. Please analyse the structure and dependencies below and give me a structured recommendation. Do not default to "split everything" or "keep everything together" — evaluate each component on its own merits.
+
+---
+
+## Current repo structure
+
+```
+governance_layer/        # Python library (core)
+  config/                # Pydantic config schema + YAML loader
+  pipeline/              # Stage interface, context object, orchestrator
+  stages/                # Concrete pipeline steps (PII scan, pseudonymization, LLM analysis, confirm gate, downstream LLM)
+  providers/             # LLM provider interface + Anthropic/OpenAI/Mock implementations
+  audit/                 # Audit repository interface + in-memory/JSON backends
+  factories.py
+  layer.py               # Public facade: GovernanceLayer
+
+server/                  # FastAPI HTTP wrapper around governance_layer
+  api_server.py          # POST /process, POST /resume/{id}, GET /events (SSE)
+  requirements.txt       # fastapi, uvicorn
+
+ui/                      # Next.js 15 / React 19 frontend
+  src/app/page.tsx       # Single-page chat UI that calls the FastAPI server
+  src/app/api/           # Next.js route handlers (proxy to FastAPI)
+
+R/                       # R Shiny frontend
+  app.R                  # Shiny app that calls the FastAPI server over HTTP
+
+tests/                   # Python tests (pytest)
+sh/                      # Shell helper scripts
+pyproject.toml           # Python package config (governance-layer, v0.1.0)
+policy.example.yaml      # Example policy config
+dev.sh                   # Starts FastAPI + Next.js together
+```
+
+---
+
+## Dependency relationships
+
+- `governance_layer` (Python library) has no dependency on anything else in this repo.
+- `server` imports `governance_layer` directly (Python import, not HTTP).
+- `ui` (Next.js) talks to `server` over HTTP only — no shared code.
+- `R/app.R` talks to `server` over HTTP only — no shared code, different language.
+- `tests/` tests `governance_layer` and `server` logic.
+
+---
+
+## Context
+
+- `governance_layer` is intended to be an installable Python package (`pip install governance-layer`).
+- `server` is a deployment artifact — one possible way to expose the library over HTTP.
+- `ui` and `R/app.R` are test/demo frontends, not production clients.
+- The project is at v0.1.0, pre-release, not yet on PyPI.
+- There is one primary developer at this stage.
+
+---
+
+## Questions to answer
+
+1. Which components, if any, have a strong technical reason to be in the same repository (shared CI, shared versioning, shared code)?
+2. Which components have a strong reason to be in separate repositories (different language, different release cadence, different audience)?
+3. What are the concrete operational costs of splitting (e.g., coordinating breaking changes, cross-repo PRs)?
+4. What splitting strategy do you recommend, and why? Consider at least three options:
+   - Keep everything in one monorepo
+   - Split into two repos
+   - Split into three or more repos
+5. Are there any splitting decisions that are clearly wrong regardless of preference?

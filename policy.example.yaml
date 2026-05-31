@@ -1,0 +1,38 @@
+# Example policy + setup configuration.
+# This file IS the documented policy -- version it, review it, show it to auditors.
+# Load with: GovernanceLayer.from_config("policy.example.yaml")
+# (YAML loading needs PyYAML installed; JSON works without it.)
+
+setup:
+  mode: auto              # "auto" or "confirm"
+  trusted_provider:
+    kind: mock            # later: local | anthropic | openai
+    model: mock-model
+  commercial_provider:
+    kind: mock
+    model: mock-model
+  audit:
+    backend: jsonfile     # "jsonfile" or "memory"
+    path: ./audit_logs
+
+policy:
+  # What we look for and how each type is handled:
+  #   pseudonymize -> replace + restore in the answer
+  #   block        -> refuse to forward the whole request
+  entity_rules:
+    - entity_type: EMAIL_ADDRESS
+      handling: pseudonymize
+    - entity_type: PHONE_NUMBER
+      handling: pseudonymize
+    - entity_type: PERSON
+      handling: pseudonymize
+    - entity_type: IBAN_CODE
+      handling: block
+    - entity_type: CREDIT_CARD
+      handling: block
+
+  # Secure by default: anything detected without a matching rule is blocked.
+  unknown_entity_handling: block
+
+  # Allow the trusted LLM to add contextual findings the regex layer missed.
+  llm_analysis_enabled: true

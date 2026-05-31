@@ -1,0 +1,154 @@
+"""LLM providers sit behind a single interface so the pipeline never depends on
+a concrete vendor. Today we ship a deterministic Mock provider so the whole
+system runs with no API key. Real providers (OpenAI, Anthropic, local) slot in
+later by implementing the same interface -- nothing else changes.
+
+Two roles use providers:
+  - the *trusted* provider: used by the analysis stage to catch contextual PII
+    the deterministic layer missed. It must be local or a vetted vendor.
+  - the *commercial* provider: the downstream model that actually answers the
+    (sanitized) request.
+"""
+
+from __future__ import annotations
+
+import re
+from abc import ABC, abstractmethod
+
+# Shared system prompt for contextual PII detection.
+# It is stable across calls, so the Anthropic provider marks it for caching.
+_PII_SYSTEM_PROMPT = (
+    "You are a privacy compliance assistant. "
+    "Identify personal or sensitive information in the user's text that "
+    "pattern-based detectors (regex / NER) might miss — full names, "
+    "job-title + organisation combinations, indirect identifiers, or "
+    "context-specific sensitive details.\n\n"
+    "Return ONLY the exact spans from the input text, one per line. "
+    "No labels, no explanations, no formatting. "
+    "If nothing sensitive is found, return an empty response."
+)
+
+
+def _parse_pii_spans(response: str) -> list[str]:
+    return [line.strip() for line in response.strip().splitlines() if line.strip()]
+
+
+class LLMProvider(ABC):
+    name: str = "unnamed_provider"
+
+    @abstractmethod
+    def complete(self, prompt: str) -> str:
+        """Return the model's completion for a prompt."""
+        raise NotImplementedError
+
+    def find_contextual_pii(self, text: str) -> list[str]:
+        """Optional: return spans of text the trusted model thinks are sensitive
+        but that pattern-based detection might miss. Default: nothing.
+        """
+        return []
+
+
+class MockProvider(LLMProvider):
+    """A deterministic stand-in. No network, no keys -- ideal for development
+    and for tests that must be reproducible.
+    """
+
+    name = "mock"
+
+    def complete(self, prompt: str) -> str:
+        # Echoes back in a predictable way so you can trace the flow end to end.
+        return f"[mock completion] received {len(prompt)} chars."
+
+    def find_contextual_pii(self, text: str) -> list[str]:
+        # Trivial heuristic for demonstration: flag capitalized two-word spans
+        # that look like names but weren't already bracketed as placeholders.
+        candidates = re.findall(r"\b[A-ZÄÖÜ][a-zäöü]+\s+[A-ZÄÖÜ][a-zäöü]+\b", text)
+        return [c for c in candidates if not c.startswith("[")]
+
+
+class AnthropicProvider(LLMProvider):
+    """Calls the Anthropic Messages API.
+
+    Requires the 'anthropic' package:  pip install 'governance-layer[anthropic]'
+    The API key is read from the environment variable named in ProviderConfig.api_key_env.
+    """
+
+    name = "anthropic"
+
+    def __init__(self, api_key: str, model: str) -> None:
+        try:
+            import anthropic as _anthropic
+        except ImportError as exc:
+            raise ImportError(
+                "The 'anthropic' package is required for the Anthropic provider. "
+                "Install it with:  pip install 'governance-layer[anthropic]'"
+            ) from exc
+        self._client = _anthropic.Anthropic(api_key=api_key)
+        self._model = model
+
+    def complete(self, prompt: str) -> str:
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=16000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return next(b.text for b in response.content if b.type == "text")
+
+    def find_contextual_pii(self, text: str) -> list[str]:
+        # The system prompt is identical on every call — mark it for caching so
+        # repeated analysis requests only pay for the user-turn tokens.
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=1024,
+            system=[
+                {
+                    "type": "text",
+                    "text": _PII_SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": text}],
+        )
+        return _parse_pii_spans(
+            next((b.text for b in response.content if b.type == "text"), "")
+        )
+
+
+class OpenAIProvider(LLMProvider):
+    """Calls the OpenAI Chat Completions API.
+
+    Requires the 'openai' package:  pip install 'governance-layer[openai]'
+    The API key is read from the environment variable named in ProviderConfig.api_key_env.
+    """
+
+    name = "openai"
+
+    def __init__(self, api_key: str, model: str) -> None:
+        try:
+            import openai as _openai
+        except ImportError as exc:
+            raise ImportError(
+                "The 'openai' package is required for the OpenAI provider. "
+                "Install it with:  pip install 'governance-layer[openai]'"
+            ) from exc
+        self._client = _openai.OpenAI(api_key=api_key)
+        self._model = model
+
+    def complete(self, prompt: str) -> str:
+        response = self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=16000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content or ""
+
+    def find_contextual_pii(self, text: str) -> list[str]:
+        response = self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=1024,
+            messages=[
+                {"role": "system", "content": _PII_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ],
+        )
+        return _parse_pii_spans(response.choices[0].message.content or "")

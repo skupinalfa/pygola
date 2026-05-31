@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "governance-layer"
+version = "0.1.0"
+description = "A configurable AI governance layer for making LLM requests compliant."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6.0"]
+dotenv = ["python-dotenv>=1.0"]
+anthropic = ["anthropic>=0.40.0"]
+openai = ["openai>=1.0.0"]
+# Future: presidio analyzer for the deterministic stage.
+# pii = ["presidio-analyzer", "presidio-anonymizer", "spacy"]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+include = ["governance_layer*"]
