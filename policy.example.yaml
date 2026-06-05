@@ -2,18 +2,159 @@
 # This file IS the documented policy -- version it, review it, show it to auditors.
 # Load with: GovernanceLayer.from_config("policy.example.yaml")
 # (YAML loading needs PyYAML installed; JSON works without it.)
+#
+# PROVIDER QUICK-REFERENCE
+# ========================
+# kind: mock       — no API key, no network, deterministic output (default)
+# kind: local      — any OpenAI-compatible local server (Ollama, LM Studio, vLLM)
+# kind: anthropic  — Anthropic Claude API  (pip install 'pygola[anthropic]')
+# kind: openai     — OpenAI API            (pip install 'pygola[openai]')
+#
+# Two providers are configured independently:
+#   trusted_provider   — runs PII analysis on the raw user input (must be trusted)
+#   commercial_provider — receives the sanitised prompt and produces the final answer
 
+# ==========================================================================
+# ACTIVE CONFIG — mock (no keys, no server required)
+# ==========================================================================
 setup:
-  mode: auto              # "auto" or "confirm"
+  mode: auto
   trusted_provider:
-    kind: mock            # later: local | anthropic | openai
-    model: mock-model
+    kind: anthropic
+    model: claude-haiku-4-5-20251001 # fast + cheap for PII analysis
+    api_key_env: ANTHROPIC_API_KEY
   commercial_provider:
-    kind: mock
-    model: mock-model
+    kind: anthropic
+    model: claude-sonnet-4-6 # more capable for final answers
+    api_key_env: ANTHROPIC_API_KEY
   audit:
-    backend: jsonfile     # "jsonfile" or "memory"
+    backend: jsonfile
     path: ./audit_logs
+
+# setup:
+#   mode: auto              # "auto" or "confirm"
+#   trusted_provider:
+#     kind: mock
+#     model: mock-model
+#   commercial_provider:
+#     kind: mock
+#     model: mock-model
+#   audit:
+#     backend: jsonfile     # "jsonfile" or "memory"
+#     path: ./audit_logs
+#
+# ==========================================================================
+# EXAMPLE: Anthropic Claude
+# pip install 'pygola[anthropic]'
+# export ANTHROPIC_API_KEY=sk-ant-...
+# ==========================================================================
+#
+# setup:
+#   mode: auto
+#   trusted_provider:
+#     kind: anthropic
+#     model: claude-haiku-4-5-20251001   # fast + cheap for PII analysis
+#     api_key_env: ANTHROPIC_API_KEY
+#   commercial_provider:
+#     kind: anthropic
+#     model: claude-sonnet-4-6           # more capable for final answers
+#     api_key_env: ANTHROPIC_API_KEY
+#   audit:
+#     backend: jsonfile
+#     path: ./audit_logs
+
+# ==========================================================================
+# EXAMPLE: OpenAI
+# pip install 'pygola[openai]'
+# export OPENAI_API_KEY=sk-...
+# ==========================================================================
+#
+# setup:
+#   mode: auto
+#   trusted_provider:
+#     kind: openai
+#     model: gpt-4o-mini                 # fast + cheap for PII analysis
+#     api_key_env: OPENAI_API_KEY
+#   commercial_provider:
+#     kind: openai
+#     model: gpt-4o                      # more capable for final answers
+#     api_key_env: OPENAI_API_KEY
+#   audit:
+#     backend: jsonfile
+#     path: ./audit_logs
+
+# ==========================================================================
+# EXAMPLE: Local LLM via Ollama (no API key required)
+# brew install ollama && ollama serve && ollama pull llama3
+# ==========================================================================
+#
+# setup:
+#   mode: auto
+#   trusted_provider:
+#     kind: local
+#     model: llama3
+#     # base_url defaults to http://localhost:11434/v1 — omit if using Ollama defaults
+#     # api_key_env is optional for local providers — omit it entirely
+#   commercial_provider:
+#     kind: local
+#     model: llama3
+#   audit:
+#     backend: memory
+
+# ==========================================================================
+# EXAMPLE: Local LLM via LM Studio
+# Download LM Studio → load a model → start the local server (port 1234)
+# ==========================================================================
+#
+# setup:
+#   mode: auto
+#   trusted_provider:
+#     kind: local
+#     model: lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF
+#     base_url: http://localhost:1234/v1
+#   commercial_provider:
+#     kind: local
+#     model: lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF
+#     base_url: http://localhost:1234/v1
+#   audit:
+#     backend: memory
+
+# ==========================================================================
+# EXAMPLE: Local LLM via vLLM
+# pip install vllm
+# python -m vllm.entrypoints.openai.api_server --model mistralai/Mistral-7B-Instruct-v0.2
+# ==========================================================================
+#
+# setup:
+#   mode: auto
+#   trusted_provider:
+#     kind: local
+#     model: mistralai/Mistral-7B-Instruct-v0.2
+#     base_url: http://localhost:8000/v1
+#   commercial_provider:
+#     kind: local
+#     model: mistralai/Mistral-7B-Instruct-v0.2
+#     base_url: http://localhost:8000/v1
+#   audit:
+#     backend: memory
+
+# ==========================================================================
+# EXAMPLE: Mixed — trusted analysis local, commercial answer via Anthropic
+# Best of both: PII never leaves your machine; final answer from a capable model
+# ==========================================================================
+#
+# setup:
+#   mode: confirm          # pause for human review before sending to Anthropic
+#   trusted_provider:
+#     kind: local          # PII analysis stays on-prem
+#     model: llama3
+#   commercial_provider:
+#     kind: anthropic      # sanitised prompt goes to Claude
+#     model: claude-sonnet-4-6
+#     api_key_env: ANTHROPIC_API_KEY
+#   audit:
+#     backend: jsonfile
+#     path: ./audit_logs
 
 policy:
   # What we look for and how each type is handled:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 
 # Shared system prompt for contextual PII detection.
 # It is stable across calls, so the Anthropic provider marks it for caching.
@@ -35,11 +36,24 @@ def _parse_pii_spans(response: str) -> list[str]:
 
 class LLMProvider(ABC):
     name: str = "unnamed_provider"
+    supports_streaming: bool = False
 
     @abstractmethod
     def complete(self, prompt: str) -> str:
         """Return the model's completion for a prompt."""
         raise NotImplementedError
+
+    def streaming_complete(self, prompt: str) -> Iterator[str]:
+        """Yield completion tokens incrementally.
+
+        Override and set supports_streaming = True on subclasses that support
+        streaming. The base implementation always raises NotImplementedError so
+        callers can check supports_streaming before calling this.
+        """
+        raise NotImplementedError(
+            f"Provider '{self.name}' does not support streaming. "
+            "Check provider.supports_streaming before calling streaming_complete()."
+        )
 
     def find_contextual_pii(self, text: str) -> list[str]:
         """Optional: return spans of text the trusted model thinks are sensitive
@@ -54,10 +68,15 @@ class MockProvider(LLMProvider):
     """
 
     name = "mock"
+    supports_streaming = True
 
     def complete(self, prompt: str) -> str:
         # Echoes back in a predictable way so you can trace the flow end to end.
         return f"[mock completion] received {len(prompt)} chars."
+
+    def streaming_complete(self, prompt: str) -> Iterator[str]:
+        for word in self.complete(prompt).split():
+            yield word + " "
 
     def find_contextual_pii(self, text: str) -> list[str]:
         # Trivial heuristic for demonstration: flag capitalized two-word spans
@@ -74,6 +93,7 @@ class AnthropicProvider(LLMProvider):
     """
 
     name = "anthropic"
+    supports_streaming = True
 
     def __init__(self, api_key: str, model: str) -> None:
         try:
@@ -87,12 +107,33 @@ class AnthropicProvider(LLMProvider):
         self._model = model
 
     def complete(self, prompt: str) -> str:
-        response = self._client.messages.create(
+        import anthropic as _anthropic
+        from .retry import retry_with_backoff
+        from .errors import RateLimitError, TimeoutError as ConnectorTimeout
+
+        def _call() -> str:
+            try:
+                response = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=16000,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return next(b.text for b in response.content if b.type == "text")
+            except _anthropic.RateLimitError as exc:
+                raise RateLimitError(str(exc)) from exc
+            except _anthropic.APITimeoutError as exc:
+                raise ConnectorTimeout(str(exc)) from exc
+
+        return retry_with_backoff(_call)
+
+    def streaming_complete(self, prompt: str) -> Iterator[str]:
+        with self._client.messages.stream(
             model=self._model,
             max_tokens=16000,
             messages=[{"role": "user", "content": prompt}],
-        )
-        return next(b.text for b in response.content if b.type == "text")
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
 
     def find_contextual_pii(self, text: str) -> list[str]:
         # The system prompt is identical on every call — mark it for caching so

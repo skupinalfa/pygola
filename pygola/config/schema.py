@@ -90,7 +90,16 @@ class ProviderConfig(BaseModel):
     # Name of the environment variable that holds the API key.
     # The library reads os.environ[api_key_env] at provider init time.
     # Never put a key value or file path here.
+    # Optional for kind="local" — a dummy key is used when absent.
     api_key_env: str = "ANTHROPIC_API_KEY"
+    # Base URL for providers that use a configurable endpoint.
+    # For kind="local" this defaults to http://localhost:11434/v1 (Ollama).
+    base_url: str | None = None
+    # Request timeout in seconds passed to the underlying SDK client.
+    timeout_seconds: float = 30.0
+    # Maximum number of retry attempts for transient errors (rate-limit, timeout).
+    # Does NOT apply to ProviderUnavailableError — connection failures are not retried.
+    max_retries: int = 3
 
     @field_validator("api_key_env")
     @classmethod

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "governance-layer"
+name = "pygola"
 version = "0.1.0"
 description = "A configurable AI governance layer for making LLM requests compliant."
 readme = "README.md"
@@ -17,9 +17,18 @@ yaml = ["PyYAML>=6.0"]
 dotenv = ["python-dotenv>=1.0"]
 anthropic = ["anthropic>=0.40.0"]
 openai = ["openai>=1.0.0"]
+local = ["openai>=1.0.0"]
+server = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "python-dotenv>=1.0",
+]
 # Future: presidio analyzer for the deterministic stage.
 # pii = ["presidio-analyzer", "presidio-anonymizer", "spacy"]
 dev = ["pytest>=7.0"]
 
+[project.scripts]
+pygola = "pygola.cli:main"
+
 [tool.setuptools.packages.find]
-include = ["governance_layer*"]
+include = ["pygola*"]

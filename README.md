@@ -40,7 +40,7 @@ Every stage writes a **PII-free** record to the audit trail.
 ## Quick start
 
 ```python
-from governance_layer import GovernanceLayer
+from pygola import GovernanceLayer
 
 layer = GovernanceLayer.from_config("policy.example.yaml")
 result = layer.handle("Email max.mustermann@example.com the report.")
@@ -50,10 +50,35 @@ print(result.sanitized_input)    # what the commercial LLM would see
 print(result.final_output)       # answer with real values restored
 ```
 
-Run the full demo (no API key needed -- uses the mock provider):
+Run the full demo (no API key needed — uses the mock provider):
 
 ```bash
-PYTHONPATH=. python example.py
+pip install -e .
+python example.py
+```
+
+## Running the HTTP server
+
+Install the server extras, then start via the CLI or uvicorn:
+
+```bash
+pip install -e '.[server]'
+
+# via CLI
+pygola serve --config policy.example.yaml
+
+# via uvicorn directly (with auto-reload for development)
+uvicorn pygola.server:app --reload --port 8000
+```
+
+The server reads `ANTHROPIC_API_KEY` (and optionally `GOVERNANCE_MODE`,
+`TRUSTED_MODEL`, `COMMERCIAL_MODEL`, `CORS_ORIGINS`, `HOST`, `PORT`) from
+the environment. Copy `.env.example` to `.env` and fill in your key.
+
+For the full dev setup (API + Next.js UI):
+
+```bash
+./dev.sh
 ```
 
 ## Where to extend
@@ -69,12 +94,16 @@ PYTHONPATH=. python example.py
 ## Layout
 
 ```
-governance_layer/
+pygola/
 ├── config/      # Pydantic schema + loader (validated, fail-fast)
 ├── pipeline/    # context object, Stage interface, orchestrator
 ├── stages/      # the concrete steps
 ├── providers/   # LLM interface + mock
 ├── audit/       # repository interface + json/memory backends
+├── server/      # optional FastAPI server (pip install pygola[server])
+│   ├── __init__.py  # import guard — clear error if extras missing
+│   └── app.py       # ServerConfig, create_app(), module-level app
+├── cli.py       # pygola serve ... entry point
 ├── factories.py # build providers & audit repo from config
 └── layer.py     # GovernanceLayer facade (public entry point)
 ```

@@ -77,3 +77,31 @@ from pygola.audit.repository import to_audit_record
 import json
 
 print(json.dumps(to_audit_record(result), indent=2, ensure_ascii=False))
+
+
+# --- 5. Streaming example (mock provider supports streaming) -------------
+divider("STREAMING (mock provider)")
+
+from pygola.config.schema import ProviderConfig
+from pygola.factories import build_provider
+
+mock_provider = build_provider(ProviderConfig(kind="mock", model="mock-model"))
+
+if mock_provider.supports_streaming:
+    print("Tokens: ", end="", flush=True)
+    for token in mock_provider.streaming_complete("Hello, world!"):
+        print(token, end="", flush=True)
+    print()
+else:
+    print(f"Provider '{mock_provider.name}' does not support streaming.")
+
+# To stream from a local LLM (requires Ollama running):
+#
+#   from pygola.config.schema import ProviderConfig
+#   from pygola.factories import build_provider
+#
+#   local = build_provider(ProviderConfig(kind="local", model="llama3"))
+#   if local.supports_streaming:
+#       for token in local.streaming_complete("Explain PII in one sentence."):
+#           print(token, end="", flush=True)
+#   print()
