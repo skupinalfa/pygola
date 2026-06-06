@@ -83,6 +83,15 @@ class AuditConfig(BaseModel):
     path: str = "./audit_logs"
 
 
+class ConversationConfig(BaseModel):
+    # Feature flag — False by default so existing single-turn behaviour is unchanged.
+    enabled: bool = False
+    # Number of recent turns to include in the LLM context window (oldest trimmed first).
+    max_turns: int = 20
+    # Seconds of inactivity after which a session is considered expired.
+    idle_timeout_seconds: int = 3600
+
+
 class ProviderConfig(BaseModel):
     # "mock" lets the whole pipeline run with no API key, for development.
     kind: Literal["mock", "openai", "anthropic", "local"] = "mock"
@@ -120,6 +129,11 @@ class SetupConfig(BaseModel):
     trusted_provider: ProviderConfig = Field(default_factory=ProviderConfig)
     commercial_provider: ProviderConfig = Field(default_factory=ProviderConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
+    conversation: ConversationConfig = Field(default_factory=ConversationConfig)
+    # Override the system prompt sent to the commercial LLM.
+    # When omitted, a built-in default is used that instructs the model to
+    # treat pseudonymised placeholders as normal values.
+    commercial_system_prompt: str | None = None
 
 
 class GovernanceConfig(BaseModel):

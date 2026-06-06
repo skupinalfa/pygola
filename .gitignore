@@ -9,3 +9,8 @@ build/
 .pytest_cache/
 *.pyc
 
+ui/
+# Next.js
+ui/node_modules/
+ui/.next/
+ui/out/

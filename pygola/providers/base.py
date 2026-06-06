@@ -37,6 +37,7 @@ def _parse_pii_spans(response: str) -> list[str]:
 class LLMProvider(ABC):
     name: str = "unnamed_provider"
     supports_streaming: bool = False
+    supports_chat_complete: bool = False
 
     @abstractmethod
     def complete(self, prompt: str) -> str:
@@ -55,6 +56,21 @@ class LLMProvider(ABC):
             "Check provider.supports_streaming before calling streaming_complete()."
         )
 
+    def chat_complete(self, messages: list[dict[str, str]]) -> str:
+        """Return the model's reply for a multi-turn messages list.
+
+        *messages* follows the OpenAI/Anthropic role-content format:
+        ``[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...]``
+
+        Override and set supports_chat_complete = True on subclasses that
+        natively support structured history. The base implementation raises
+        NotImplementedError so callers can check supports_chat_complete first.
+        """
+        raise NotImplementedError(
+            f"Provider '{self.name}' does not support chat_complete. "
+            "Check provider.supports_chat_complete before calling."
+        )
+
     def find_contextual_pii(self, text: str) -> list[str]:
         """Optional: return spans of text the trusted model thinks are sensitive
         but that pattern-based detection might miss. Default: nothing.
@@ -69,6 +85,7 @@ class MockProvider(LLMProvider):
 
     name = "mock"
     supports_streaming = True
+    supports_chat_complete = True
 
     def complete(self, prompt: str) -> str:
         # Echoes back in a predictable way so you can trace the flow end to end.
@@ -77,6 +94,10 @@ class MockProvider(LLMProvider):
     def streaming_complete(self, prompt: str) -> Iterator[str]:
         for word in self.complete(prompt).split():
             yield word + " "
+
+    def chat_complete(self, messages: list[dict[str, str]]) -> str:
+        n_turns = sum(1 for m in messages if m.get("role") == "user")
+        return f"[mock chat response for {n_turns} user turn(s)]"
 
     def find_contextual_pii(self, text: str) -> list[str]:
         # Trivial heuristic for demonstration: flag capitalized two-word spans
@@ -94,6 +115,7 @@ class AnthropicProvider(LLMProvider):
 
     name = "anthropic"
     supports_streaming = True
+    supports_chat_complete = True
 
     def __init__(self, api_key: str, model: str) -> None:
         try:
@@ -135,6 +157,32 @@ class AnthropicProvider(LLMProvider):
             for text in stream.text_stream:
                 yield text
 
+    def chat_complete(self, messages: list[dict[str, str]]) -> str:
+        import anthropic as _anthropic
+        from .retry import retry_with_backoff
+        from .errors import RateLimitError, TimeoutError as ConnectorTimeout
+
+        # Anthropic uses a dedicated 'system' parameter; extract it if present.
+        system: str | None = None
+        chat_messages = messages
+        if messages and messages[0].get("role") == "system":
+            system = messages[0]["content"]
+            chat_messages = messages[1:]
+
+        def _call() -> str:
+            try:
+                kwargs: dict = dict(model=self._model, max_tokens=4096, messages=chat_messages)
+                if system:
+                    kwargs["system"] = system
+                response = self._client.messages.create(**kwargs)
+                return next(b.text for b in response.content if b.type == "text")
+            except _anthropic.RateLimitError as exc:
+                raise RateLimitError(str(exc)) from exc
+            except _anthropic.APITimeoutError as exc:
+                raise ConnectorTimeout(str(exc)) from exc
+
+        return retry_with_backoff(_call)
+
     def find_contextual_pii(self, text: str) -> list[str]:
         # The system prompt is identical on every call — mark it for caching so
         # repeated analysis requests only pay for the user-turn tokens.
@@ -163,6 +211,7 @@ class OpenAIProvider(LLMProvider):
     """
 
     name = "openai"
+    supports_chat_complete = True
 
     def __init__(self, api_key: str, model: str) -> None:
         try:
@@ -180,6 +229,14 @@ class OpenAIProvider(LLMProvider):
             model=self._model,
             max_tokens=16000,
             messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content or ""
+
+    def chat_complete(self, messages: list[dict[str, str]]) -> str:
+        response = self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=4096,
+            messages=messages,
         )
         return response.choices[0].message.content or ""
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 from ..config.schema import PolicyConfig
 from ..pipeline.context import DetectedEntity, GovernanceContext
 from ..pipeline.stage import Stage
-from ..providers.base import LLMProvider
+from ..providers.base import LLMProvider, _PII_SYSTEM_PROMPT
 
 
 class LlmAnalysisStage(Stage):
@@ -23,12 +23,35 @@ class LlmAnalysisStage(Stage):
         self.policy = policy
 
     def process(self, context: GovernanceContext) -> GovernanceContext:
+        provider_name = self.provider.name
+        model_id = getattr(self.provider, "_model", "n/a")
+
         if not self.policy.llm_analysis_enabled:
+            context.llm_calls.append({
+                "role": "trusted",
+                "skipped": True,
+                "provider": provider_name,
+                "model": model_id,
+                "messages": [],
+                "response": "",
+            })
             context.record(self.name, {"skipped": True, "reason": "disabled in policy"})
             return context
 
         text = context.original_input
         spans = self.provider.find_contextual_pii(text)
+
+        context.llm_calls.append({
+            "role": "trusted",
+            "skipped": False,
+            "provider": provider_name,
+            "model": model_id,
+            "messages": [
+                {"role": "system", "content": _PII_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            "response": "\n".join(spans),
+        })
 
         added = 0
         # Avoid double-counting spans the deterministic layer already covered.

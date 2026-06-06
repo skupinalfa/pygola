@@ -43,7 +43,7 @@ class GovernanceLayer:
                 LlmAnalysisStage(trusted, config.policy),
                 PseudonymizationStage(config.policy),
                 HumanConfirmStage(config.setup.mode),
-                DownstreamLlmStage(commercial),
+                DownstreamLlmStage(commercial, config.setup.commercial_system_prompt),
             ]
         )
 
@@ -51,9 +51,15 @@ class GovernanceLayer:
     def from_config(cls, path: str | None = None) -> "GovernanceLayer":
         return cls(load_config(path))
 
-    def handle(self, user_input: str) -> GovernanceContext:
+    def handle(
+        self,
+        user_input: str,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> GovernanceContext:
         """Run a request through the full pipeline and persist the audit record."""
         context = GovernanceContext(original_input=user_input)
+        if conversation_history:
+            context.conversation_history = list(conversation_history)
         try:
             context = self.pipeline.run(context)
         except PipelinePaused as paused:
