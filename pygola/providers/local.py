@@ -32,6 +32,7 @@ class LocalProvider(LLMProvider):
 
     name = "local"
     supports_streaming = True
+    supports_chat_complete = True
 
     def __init__(self, base_url: str, api_key: str, model: str) -> None:
         try:
@@ -89,6 +90,31 @@ class LocalProvider(LLMProvider):
                     yield delta
         except _openai.APIConnectionError as exc:
             raise ProviderUnavailableError(self._base_url, cause=exc) from exc
+
+    def chat_complete(self, messages: list[dict[str, str]]) -> str:
+        try:
+            import openai as _openai
+        except ImportError:
+            raise
+
+        from .retry import retry_with_backoff
+        from .errors import RateLimitError, TimeoutError as ConnectorTimeout
+
+        def _call() -> str:
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                )
+                return response.choices[0].message.content or ""
+            except _openai.APIConnectionError as exc:
+                raise ProviderUnavailableError(self._base_url, cause=exc) from exc
+            except _openai.RateLimitError as exc:
+                raise RateLimitError(str(exc)) from exc
+            except _openai.APITimeoutError as exc:
+                raise ConnectorTimeout(str(exc)) from exc
+
+        return retry_with_backoff(_call)
 
     def find_contextual_pii(self, text: str) -> list[str]:
         try:

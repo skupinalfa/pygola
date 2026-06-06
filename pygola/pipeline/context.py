@@ -74,6 +74,18 @@ class GovernanceContext:
     decision: Decision = Decision.PENDING
     block_reasons: list[str] = field(default_factory=list)
 
+    # --- conversation (multi-turn) ---
+    # Set by the server before handle() is called; None for single-turn requests.
+    conversation_id: str | None = None
+    # OpenAI-style messages list: [{"role": "user"|"assistant", "content": "..."}]
+    # Populated from ConversationStore before the pipeline runs; empty for first turn.
+    conversation_history: list[dict[str, str]] = field(default_factory=list)
+
+    # --- debug instrumentation ---
+    # Each LLM-calling stage appends one record here so callers can see the
+    # exact payload that left the trust boundary.
+    llm_calls: list[dict] = field(default_factory=list)
+
     # --- audit trail ---
     history: list[StageRecord] = field(default_factory=list)
 

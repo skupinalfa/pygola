@@ -38,11 +38,8 @@ else
 fi
 
 step "Installing Python packages"
-uv pip install -e ".[dev]" -q
-ok "governance_layer (editable)"
-
-uv pip install -r server/requirements.txt -q
-ok "server deps (fastapi, uvicorn)"
+uv pip install -e ".[dev,server]" -q
+ok "pygola (editable, with server extras)"
 
 # ── node ───────────────────────────────────────────────────────────────────
 step "Installing Node.js packages"
@@ -73,7 +70,7 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-PYTHONUNBUFFERED=1 .venv/bin/uvicorn server.api_server:app --reload --port 8000 &
+PYTHONUNBUFFERED=1 .venv/bin/uvicorn pygola.server:app --reload --port 8000 &
 PYTHON_PID=$!
 
 (cd ui && npm run dev) &

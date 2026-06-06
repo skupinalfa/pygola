@@ -47,6 +47,7 @@ from pygola.config.schema import (
     ProviderConfig,
     SetupConfig,
 )
+from pygola.conversation import Turn, InMemoryConversationStore
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +70,7 @@ class ServerConfig(BaseModel):
 class ProcessRequest(BaseModel):
     text: str
     mode: str = "auto"  # kept for UI compatibility; layer mode is fixed at startup
+    conversation_id: str | None = None
 
 
 class ResumeRequest(BaseModel):
@@ -81,7 +83,7 @@ class ResumeRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _serialize(ctx: GovernanceContext) -> dict[str, Any]:
-    return {
+    result: dict[str, Any] = {
         "session_id": ctx.request_id,
         "decision": ctx.decision.value,
         "original_input": ctx.original_input,
@@ -97,6 +99,10 @@ def _serialize(ctx: GovernanceContext) -> dict[str, Any]:
             for r in ctx.history
         ],
     }
+    if ctx.conversation_id is not None:
+        result["conversation_id"] = ctx.conversation_id
+    result["llm_calls"] = ctx.llm_calls
+    return result
 
 
 async def _broadcast(
@@ -125,6 +131,7 @@ def _init_state(
     app.state.sessions_lock = threading.Lock()
     app.state.sse_queues: list[asyncio.Queue[str]] = []
     app.state.sse_lock = asyncio.Lock()
+    app.state.conv_store = InMemoryConversationStore()
 
 
 def _attach_routes(fastapi_app: FastAPI, config: ServerConfig) -> None:
@@ -168,10 +175,62 @@ def _attach_routes(fastapi_app: FastAPI, config: ServerConfig) -> None:
     @fastapi_app.post("/process")
     async def process(req: ProcessRequest, request: Request) -> dict[str, Any]:
         state = request.app.state
+        conv_cfg = state.layer.config.setup.conversation
+
         if not req.text.strip():
             raise HTTPException(status_code=400, detail="text must not be empty.")
 
-        ctx = await asyncio.to_thread(state.layer.handle, req.text)
+        # --- conversation guard rails ---
+        if req.conversation_id is not None:
+            if not conv_cfg.enabled:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Conversation tracking is not enabled. "
+                        "Set conversation.enabled=true in config."
+                    ),
+                )
+            if not state.conv_store.has_session(req.conversation_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Conversation '{req.conversation_id}' not found or has expired."
+                    ),
+                )
+
+        # --- load prior history ---
+        history: list[dict[str, str]] = []
+        conversation_id: str | None = req.conversation_id
+
+        if conv_cfg.enabled and conversation_id and state.conv_store.has_session(conversation_id):
+            turns = state.conv_store.get_turns(conversation_id)
+            # Trim to configured window (most recent N turns)
+            recent = turns[-conv_cfg.max_turns :]
+            for turn in recent:
+                history.append({"role": "user", "content": turn.user_message})
+                history.append({"role": "assistant", "content": turn.assistant_reply})
+        elif conv_cfg.enabled and conversation_id is None:
+            # Start a new session
+            conversation_id = state.conv_store.create_session()
+
+        # --- run governance pipeline ---
+        ctx = await asyncio.to_thread(state.layer.handle, req.text, history or None)
+        ctx.conversation_id = conversation_id
+
+        # --- persist completed turn ---
+        if (
+            conv_cfg.enabled
+            and conversation_id
+            and ctx.decision.value == "allow"
+            and ctx.final_output
+        ):
+            state.conv_store.append_turn(
+                conversation_id,
+                Turn(
+                    user_message=ctx.sanitized_input or ctx.original_input,
+                    assistant_reply=ctx.final_output,
+                ),
+            )
 
         if ctx.decision.value == "needs_confirm":
             with state.sessions_lock:
@@ -229,6 +288,29 @@ def _attach_routes(fastapi_app: FastAPI, config: ServerConfig) -> None:
 # Public factory
 # ---------------------------------------------------------------------------
 
+    @fastapi_app.delete("/conversations/{conversation_id}")
+    async def delete_conversation(
+        conversation_id: str, request: Request
+    ) -> dict[str, str]:
+        state = request.app.state
+        if not state.conv_store.has_session(conversation_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Conversation '{conversation_id}' not found.",
+            )
+        state.conv_store.delete_session(conversation_id)
+        return {"deleted": conversation_id}
+
+
+async def _idle_expiry_loop(app: FastAPI) -> None:
+    """Background task that purges sessions idle beyond the configured timeout."""
+    while True:
+        await asyncio.sleep(60)
+        conv_cfg = app.state.layer.config.setup.conversation
+        if conv_cfg.enabled:
+            app.state.conv_store.expire_idle_sessions(conv_cfg.idle_timeout_seconds)
+
+
 def create_app(layer: GovernanceLayer, config: ServerConfig) -> FastAPI:
     """Create and return a configured FastAPI application.
 
@@ -238,7 +320,11 @@ def create_app(layer: GovernanceLayer, config: ServerConfig) -> FastAPI:
     @asynccontextmanager
     async def lifespan(fastapi_app: FastAPI):
         _init_state(fastapi_app, layer)
-        yield
+        expiry_task = asyncio.create_task(_idle_expiry_loop(fastapi_app))
+        try:
+            yield
+        finally:
+            expiry_task.cancel()
 
     fastapi_app = FastAPI(title="Governance Layer API", lifespan=lifespan)
     fastapi_app.add_middleware(
